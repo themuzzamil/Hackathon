@@ -1,0 +1,152 @@
+# Hackathon Tutorial
+
+Tutorial: Building a PDF-Based Quiz and Chat Application Using LangChain, Chroma, and Gemini LLM in Google Colab
+Overview
+This tutorial will guide you through building a PDF-based application that:
+
+Allows users to upload a PDF.
+Processes and stores the document content in a vector database (Chroma).
+Enables users to interact with the content via:
+Chat mode: Extract information or ask questions about the PDF.
+Quiz mode: Generate quizzes based on the document content.
+The application uses the LangChain framework, Google Gemini LLM, SQLite for metadata storage, and Cohere for text embeddings.
+
+Step 1: Environment Setup
+Install the necessary Python libraries:
+
+python
+Copy code
+!pip install -qU pypdf scikit-learn langchain_community
+!pip install --quiet langchain langchain-text-splitters langchain_google_genai
+!pip install --quiet langchain_chroma cohere PyPDF2
+!pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib langgraph
+Step 2: Configure API Keys
+Replace placeholders with your API keys:
+
+Gemini API Key: Configure for LLM interactions.
+Cohere API Key: Used for embedding text.
+python
+Copy code
+from google.colab import userdata
+import google.generativeai as genai
+
+GEMINI_API_KEY = userdata.get("GEMINI_API_KEY")  # Set your Gemini API key in Colab
+genai.configure(api_key=GEMINI_API_KEY)
+Step 3: Database Initialization
+Use SQLite to manage metadata about uploaded files:
+
+python
+Copy code
+import sqlite3
+
+db_path = "uploaded_files_metadata.db"
+
+def initialize_db():
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS uploaded_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_name TEXT UNIQUE,
+            file_name TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+initialize_db()
+Step 4: PDF Handling and Vector Database Integration
+Define functions to:
+
+Load and parse PDF content.
+Process the content into chunks using LangChain splitters.
+Store content in a vector database using Chroma and embeddings from Cohere.
+python
+Copy code
+import PyPDF2
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain.embeddings import CohereEmbeddings
+from langchain.schema import Document
+from uuid import uuid4
+
+def load_pdf(file_path):
+    with open(file_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        return "".join(page.extract_text() for page in reader.pages)
+
+def process_pdf(file_name, collection_name):
+    pdf_content = load_pdf(file_name)
+    cohere_api_key = userdata.get("Embedding_API")  # Replace with your API key
+    embedding_function = CohereEmbeddings(
+        model="embed-english-light-v2.0",
+        cohere_api_key=cohere_api_key
+    )
+    vector_db = Chroma(
+        collection_name=collection_name,
+        embedding_function=embedding_function
+    )
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=7500, chunk_overlap=100)
+    docs = [Document(page_content=pdf_content)]
+    chunks = text_splitter.split_documents(docs)
+    vector_db.add_texts([chunk.page_content for chunk in chunks])
+    return vector_db
+Step 5: Handling User Input
+Provide options to:
+
+Select an already-uploaded file.
+Upload a new PDF.
+python
+Copy code
+from google.colab import files
+
+def handle_file_selection():
+    uploaded = files.upload()
+    uploaded_file_path = next(iter(uploaded))
+    unique_collection_name = f"pdf_chunks_{uuid4()}"
+    process_pdf(uploaded_file_path, unique_collection_name)
+    return unique_collection_name
+Step 6: Quiz and Chat Functionality
+Quiz Mode
+Generate a quiz using a prompt template and the Gemini LLM.
+
+python
+Copy code
+def generate_quiz(db, question_count):
+    prompt = f"""Create {question_count} multiple-choice quiz questions from the uploaded document."""
+    context = " ".join(doc.page_content for doc in db.similarity_search("", k=2))
+    response = llm.invoke(f"{prompt}\nContext: {context}")
+    print(response)
+Chat Mode
+Interact with the document content using memory.
+
+python
+Copy code
+from langgraph.store.memory import InMemoryStore
+
+def chatbot(db, state):
+    memory = InMemoryStore()
+    while True:
+        query = input("Enter your question (or type 'quit'): ").strip()
+        if query.lower() == 'quit':
+            break
+        context = " ".join(doc.page_content for doc in db.similarity_search(query, k=2))
+        prompt = f"Context: {context}\nQuery: {query}"
+        response = llm.invoke(prompt)
+        print(response)
+Step 7: Run the Application
+Integrate all components and run the application. Prompt users to choose between chat or quiz modes:
+
+python
+Copy code
+collection_name = handle_file_selection()
+vector_db = process_pdf("example.pdf", collection_name)
+
+mode = input("Enter 'chat' for Chat Mode or 'quiz' for Quiz Mode: ").lower()
+if mode == "chat":
+    chatbot(vector_db, {})
+else:
+    question_count = int(input("How many questions do you want? "))
+    generate_quiz(vector_db, question_count)
+Conclusion
+Now We have a functional application to interact with PDF files, either by chatting with the document's content or generating quizzes. Customize and expand features like memory, quiz scoring, or additional LLM models for advanced use cases.
